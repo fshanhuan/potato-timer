@@ -8,7 +8,7 @@ import time
 # ============================================================
 # 枚举类：统一管理所有状态常量
 # ============================================================
-
+#有没有新增功能根据四象限法则对任务字典列表进行lambda排序，返回的列表前端显示
 class TimerMode(Enum):
     """计时模式"""
     POMODORO   = 0   # 番茄钟
@@ -90,7 +90,7 @@ class BaseTimer(ABC):
         """
         主动停止，返回本次实际专注秒数
         stop 与 reset 的区别：stop 保留数据供记录，reset 清空一切
-        
+
         """
         focused = self.elapsed
         self.reset()
@@ -115,11 +115,11 @@ class CountUpTimer(BaseTimer):
     """
     正向计时器
     职责：从 0 向上计时，记录本次专注时长
-    无目标时长时可无限计时；设置目标时长后到达即结束
+    这里只要开启正向计时就会判定事件完成，如果需要有目标时间直接使用倒计时即可
     """
     def __init__(self, target_seconds: Optional[float] = None):
         super().__init__()
-        self.target_seconds: Optional[float] = target_seconds  # None 表示无限制
+        
 
     def get_display_time(self) -> float:
         """返回已经过秒数"""
@@ -128,7 +128,7 @@ class CountUpTimer(BaseTimer):
     def is_finished(self) -> bool:
         if self.target_seconds is None:
             return False
-        return self.elapsed >= self.target_seconds
+        return self.elapsed >= 0   #判定条件是0
 
 
 class CountDownTimer(BaseTimer):
