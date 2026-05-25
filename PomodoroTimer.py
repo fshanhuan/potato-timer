@@ -157,7 +157,7 @@ class PomodoroTimer(BaseTimer):
     DEFAULT_WORK:        float = 25 * 60   # 默认工作时长（秒）
     DEFAULT_SHORT_BREAK: float =  5 * 60   # 默认短休息时长
     DEFAULT_LONG_BREAK:  float = 15 * 60   # 默认长休息时长
-    POMODOROS_PER_ROUND: int   = 4         # 几个番茄后触发长休息
+    POMODOROS_PER_ROUND: int   = 4         # 4个番茄后触发长休息
 
     def __init__(
         self,
@@ -182,7 +182,7 @@ class PomodoroTimer(BaseTimer):
             PomodoroPhase.SHORT_BREAK: self.short_break_seconds,
             PomodoroPhase.LONG_BREAK:  self.long_break_seconds,
         }
-        return mapping[self.current_phase]
+        return mapping[self.current_phase]     #创建了一个mapping的字典
 
     def get_display_time(self) -> float:
         """返回当前阶段剩余秒数"""
@@ -212,6 +212,8 @@ class PomodoroTimer(BaseTimer):
         self.reset()          # 重置计时，准备下一阶段
         self.start()          # 自动开始下一阶段
         return self.current_phase
+
+
 
 
 # ============================================================
@@ -268,7 +270,7 @@ class DailyStats:
     """
     def __init__(self, stat_date: date):
         self.stat_date:        date  = stat_date
-        self.records:          List[SessionRecord] = []
+        self.records:          List[SessionRecord] = []    #SessionRecord类列表
 
         # 以下字段在 recalculate() 时更新
         self.total_focused_seconds: float = 0.0   # 当日总专注秒数
