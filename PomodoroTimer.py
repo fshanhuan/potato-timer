@@ -65,6 +65,11 @@ class BaseTimer(ABC):
         """判断计时是否自然结束"""
         pass
 
+    @abstractmethod
+    def get_mode(self) -> TimerMode:
+        """返回计时模式枚举"""
+        pass
+
     # ---------- 通用控制操作 ----------
 
     def start(self) -> None:
@@ -102,6 +107,15 @@ class BaseTimer(ABC):
         self._accumulated = 0.0
         self._pause_start = None
         self.state = TimerState.IDLE
+    def tick(self) -> bool:
+        """
+        每帧/每秒调用一次，检测是否自然结束
+        返回 True 表示刚刚结束（调用方可据此触发下一阶段）
+        """
+        if self.state == TimerState.RUNNING and self.is_finished():
+            self.state = TimerState.FINISHED
+            return True
+        return False    
 
     @property
     def elapsed(self) -> float:
@@ -109,7 +123,13 @@ class BaseTimer(ABC):
         if self.state == TimerState.RUNNING and self._start_time:
             return self._accumulated + (time.time() - self._start_time)
         return self._accumulated  # PAUSED / IDLE 时直接返回已累计值
-
+    
+    
+    def format_display(self) -> str:
+        """将展示时间格式化为 MM:SS 字符串"""
+        total_sec = int(self.get_display_time())
+        minutes, seconds = divmod(total_sec, 60)
+        return f"{minutes:02d}:{seconds:02d}"
 
 class CountUpTimer(BaseTimer):
     """
@@ -129,7 +149,9 @@ class CountUpTimer(BaseTimer):
         if self.target_seconds is None:
             return False
         return self.elapsed >= 0   #判定条件是0
-
+    
+    def get_mode(self) -> TimerMode:
+        return TimerMode.COUNTUP
 
 class CountDownTimer(BaseTimer):
     """
@@ -146,7 +168,9 @@ class CountDownTimer(BaseTimer):
 
     def is_finished(self) -> bool:
         return self.elapsed >= self.target_seconds
-
+    
+    def get_mode(self) -> TimerMode:
+        return TimerMode.COUNTDOWN
 
 class PomodoroTimer(BaseTimer):
     """
@@ -212,8 +236,21 @@ class PomodoroTimer(BaseTimer):
         self.reset()          # 重置计时，准备下一阶段
         self.start()          # 自动开始下一阶段
         return self.current_phase
+    
+    def get_mode(self) -> TimerMode:
+        return TimerMode.POMODORO
 
-
+    def get_progress_info(self) -> dict:
+        """返回当前番茄进度信息，方便前端展示"""
+        return {
+            "current_phase":       self.current_phase.value,
+            "completed_pomodoros": self.completed_pomodoros,
+            "pomodoros_per_round": self.POMODOROS_PER_ROUND,
+            "next_is_long_break":  self.completed_pomodoros % self.POMODOROS_PER_ROUND
+                                   == self.POMODOROS_PER_ROUND - 1,
+            "display_time":        self.format_display(),
+            "state":               self.state.value,
+        }
 
 
 # ============================================================
@@ -293,6 +330,8 @@ class DailyStats:
             if r.mode == TimerMode.POMODORO and r.is_completed
         )
 
+
+
     @property
     def total_focused_minutes(self) -> float:
         return round(self.total_focused_seconds / 60, 2)
@@ -316,13 +355,47 @@ class Statistics:
     def __init__(self, user_id: int):
         self.user_id:   int = user_id
         # key = date 对象，value = DailyStats
-        self._daily_map: Dict[date, DailyStats] = {}
+        self._daily_map: Dict[date, DailyStats] = {}   #按日期储存数据
+        self._next_record_id: int = 1
 
+    def create_and_save_record(
+        self,
+        task_id:         int,
+        mode:            TimerMode,
+        started_at:      datetime,
+        ended_at:        datetime,
+        focused_seconds: float,
+        is_completed:    bool = True,
+        note:            Optional[str] = None,
+    ) -> SessionRecord:
+        """工厂方法：创建 SessionRecord 并自动归档"""
+        record = SessionRecord(
+            record_id       = self._next_record_id,
+            task_id         = task_id,
+            user_id         = self.user_id,
+            mode            = mode,
+            started_at      = started_at,
+            ended_at        = ended_at,
+            focused_seconds = focused_seconds,
+            is_completed    = is_completed,
+            note            = note,
+        )
+        self._next_record_id += 1
+        self._archive(record)
+        return record
+    
+    def _archive(self, record: SessionRecord) -> None:
+        """将记录归入对应日期的 DailyStats"""
+        d = record.started_at.date()
+        if d not in self._daily_map:
+            self._daily_map[d] = DailyStats(d)
+        self._daily_map[d].add_record(record)        
+    
     def add_session_record(self, record: SessionRecord) -> None:
         """将会话记录归入对应日期的 DailyStats"""
         record_date = record.started_at.date()
         if record_date not in self._daily_map:
-            self._daily_map[record_date] = DailyStats(record_date)
+            self._daily_map[record_date] = DailyStats(record_date)    #创建DailyStats类实例
         self._daily_map[record_date].add_record(record)
 
     def get_daily(self, query_date: date) -> Optional[DailyStats]:
@@ -392,7 +465,7 @@ class Task:
         if mode == TimerMode.POMODORO:
             return PomodoroTimer()
         elif mode == TimerMode.COUNTDOWN:
-            return CountDownTimer(target_seconds=25 * 60)
+            return CountDownTimer(target_seconds=25 * 60)      #这里有默认的目标时间
         else:
             return CountUpTimer()
 
@@ -414,12 +487,16 @@ class Task:
 
     def to_dict(self) -> dict:
         return {
-            "task_id":    self.task_id,
-            "title":      self.title,
-            "due_date":   self.due_date.isoformat(),
-            "mode":       self.mode.name,
-            "status":     self.status.value,
-            "motto":      self.motto,
+            "task_id":               self.task_id,
+            "title":                 self.title,
+            "description":           self.description,
+            "motto":                 self.motto,
+            "due_date":              self.due_date.isoformat(),
+            "mode":                  self.mode.name,
+            "status":                self.status.value,
+            "total_focused_minutes": self.total_focused_minutes,
+            "timer_state":           self.timer.state.value,
+            "display_time":          self.timer.format_display(),
         }
 
 
