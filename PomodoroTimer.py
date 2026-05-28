@@ -1,5 +1,5 @@
-from typing import List, Optional, Dict
-from datetime import datetime, date
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date, timedelta
 from abc import ABC, abstractmethod
 from enum import Enum
 import time
@@ -36,6 +36,15 @@ class TaskStatus(Enum):
     PENDING    = "pending"     # 待开始
     ACTIVE     = "active"      # 进行中
     COMPLETED  = "completed"   # 已完成
+    ABANDONED  = "abandoned"   # 已放弃
+
+
+class ImportanceLevel(Enum):
+    """事件重要性等级"""
+    LOW      = 1   # 普通
+    MEDIUM   = 2   # 重要
+    HIGH     = 3   # 很重要
+    CRITICAL = 4   # 紧急且重要
 
 
 # ============================================================
@@ -139,6 +148,7 @@ class CountUpTimer(BaseTimer):
     """
     def __init__(self, target_seconds: Optional[float] = None):
         super().__init__()
+        self.target_seconds: Optional[float] = target_seconds
         
 
     def get_display_time(self) -> float:
@@ -148,7 +158,7 @@ class CountUpTimer(BaseTimer):
     def is_finished(self) -> bool:
         if self.target_seconds is None:
             return False
-        return self.elapsed >= 0   #判定条件是0
+        return self.elapsed >= self.target_seconds   #判定条件是目标秒数
     
     def get_mode(self) -> TimerMode:
         return TimerMode.COUNTUP
@@ -418,6 +428,84 @@ class Statistics:
             if day.year == year and day.month == month
         ]
 
+    def get_records_between(self, start_date: date, end_date: date) -> List[SessionRecord]:
+        """查询日期范围内的所有会话记录（包含开始和结束日期）"""
+        records: List[SessionRecord] = []
+        for day, stats in self._daily_map.items():
+            if start_date <= day <= end_date:
+                records.extend(stats.records)
+        return records
+
+    def get_time_usage_report(
+        self,
+        tasks: List["Task"],
+        start_date: date,
+        end_date: date,
+    ) -> dict:
+        """
+        统计时间使用情况，给出实际用时与计划差异，以及可能浪费的时间报告
+        Args:
+            tasks      : 需要纳入统计的任务列表
+            start_date : 统计开始日期
+            end_date   : 统计结束日期
+        Returns:
+            结构化报告字典，可直接给前端展示
+        """
+        records = self.get_records_between(start_date, end_date)
+        task_map = {task.task_id: task for task in tasks}
+        focused_by_task: Dict[int, float] = {}
+        interrupted_seconds = 0.0
+        for record in records:
+            focused_by_task[record.task_id] = focused_by_task.get(record.task_id, 0.0) + record.focused_seconds
+            if not record.is_completed:
+                interrupted_seconds += record.focused_seconds
+
+        task_reports = []
+        total_planned_seconds = 0.0
+        total_actual_seconds = 0.0
+        overdue_unfinished = 0
+        for task in tasks:
+            if not (start_date <= task.due_date.date() <= end_date):
+                continue
+            planned_seconds = task.planned_minutes * 60
+            actual_seconds = focused_by_task.get(task.task_id, 0.0)
+            diff_seconds = actual_seconds - planned_seconds
+            total_planned_seconds += planned_seconds
+            total_actual_seconds += actual_seconds
+            if task.status != TaskStatus.COMPLETED and task.due_date < datetime.now():
+                overdue_unfinished += 1
+            task_reports.append({
+                "task_id": task.task_id,
+                "title": task.title,
+                "planned_minutes": round(planned_seconds / 60, 2),
+                "actual_minutes": round(actual_seconds / 60, 2),
+                "difference_minutes": round(diff_seconds / 60, 2),
+                "status": task.status.value,
+                "is_overdue": task.status != TaskStatus.COMPLETED and task.due_date < datetime.now(),
+            })
+
+        idle_or_unfinished_seconds = max(0.0, total_planned_seconds - total_actual_seconds)
+        suggestions = []
+        if idle_or_unfinished_seconds > 0:
+            suggestions.append("实际专注少于计划，建议缩小单个任务粒度或提前安排开始时间")
+        if interrupted_seconds > 0:
+            suggestions.append("存在中断会话，建议把易被打断的任务安排在低干扰时段")
+        if overdue_unfinished > 0:
+            suggestions.append("存在逾期未完成任务，建议优先处理高重要性和临近截止任务")
+
+        return {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "planned_minutes": round(total_planned_seconds / 60, 2),
+            "actual_minutes": round(total_actual_seconds / 60, 2),
+            "difference_minutes": round((total_actual_seconds - total_planned_seconds) / 60, 2),
+            "time_waste_minutes": round((idle_or_unfinished_seconds + interrupted_seconds) / 60, 2),
+            "interrupted_minutes": round(interrupted_seconds / 60, 2),
+            "overdue_unfinished": overdue_unfinished,
+            "tasks": task_reports,
+            "suggestions": suggestions,
+        }
+
     def get_total_focused_today(self) -> float:
         """便捷方法：获取今日总专注分钟数"""
         stats = self.get_daily(date.today())
@@ -442,6 +530,9 @@ class Task:
         due_date:    datetime,
         mode:        TimerMode,
         motto:       str = "",
+        importance:  ImportanceLevel = ImportanceLevel.MEDIUM,
+        planned_minutes: float = 25.0,
+        reminder_at: Optional[datetime] = None,
     ):
         self.task_id:     int       = task_id
         self.title:       str       = title
@@ -449,6 +540,9 @@ class Task:
         self.motto:       str       = motto        # AI 生成的鼓励话语
         self.due_date:    datetime  = due_date
         self.mode:        TimerMode = mode
+        self.importance:   ImportanceLevel = importance
+        self.planned_minutes: float = max(0.0, planned_minutes)
+        self.reminder_at: Optional[datetime] = reminder_at
         self.status:      TaskStatus = TaskStatus.PENDING
         self.created_at:  datetime  = datetime.now()
         self.completed_at: Optional[datetime] = None
@@ -485,6 +579,63 @@ class Task:
     def update_due_date(self, new_date: datetime) -> None:
         self.due_date = new_date
 
+    def attach_record(self, record: SessionRecord) -> None:
+        """关联一次计时记录到当前任务"""
+        self.session_records.append(record)
+
+    @property
+    def total_focused_seconds(self) -> float:
+        """当前任务累计专注秒数"""
+        return sum(record.focused_seconds for record in self.session_records)
+
+    @property
+    def total_focused_minutes(self) -> float:
+        """当前任务累计专注分钟数"""
+        return round(self.total_focused_seconds / 60, 2)
+
+    def build_reminder(self, now: Optional[datetime] = None) -> dict:
+        """
+        根据事件重要性和提醒时间生成不同提醒方式
+        返回字段包括提醒渠道、提醒强度和提示文案，方便前端决定弹窗/声音/震动等表现
+        """
+        now = now or datetime.now()
+        remind_time = self.reminder_at or self.due_date
+        minutes_left = (remind_time - now).total_seconds() / 60
+        if self.status == TaskStatus.COMPLETED:
+            level = "none"
+            channels: List[str] = []
+            message = "任务已完成，无需提醒"
+        elif minutes_left <= 0:
+            level = "urgent"
+            channels = ["popup", "sound", "desktop"]
+            message = f"{self.title} 已到提醒时间，请立即处理"
+        elif self.importance == ImportanceLevel.CRITICAL or minutes_left <= 15:
+            level = "strong"
+            channels = ["popup", "sound", "desktop"]
+            message = f"{self.title} 即将到期，还剩 {int(minutes_left)} 分钟"
+        elif self.importance == ImportanceLevel.HIGH or minutes_left <= 60:
+            level = "normal"
+            channels = ["popup", "desktop"]
+            message = f"{self.title} 需要关注，还剩 {int(minutes_left)} 分钟"
+        elif self.importance == ImportanceLevel.MEDIUM:
+            level = "soft"
+            channels = ["popup"]
+            message = f"{self.title} 有一个提醒"
+        else:
+            level = "silent"
+            channels = ["badge"]
+            message = f"{self.title} 已加入待办提醒"
+        return {
+            "task_id": self.task_id,
+            "title": self.title,
+            "importance": self.importance.name,
+            "remind_time": remind_time.isoformat(),
+            "minutes_left": round(minutes_left, 1),
+            "level": level,
+            "channels": channels,
+            "message": message,
+        }
+
     def to_dict(self) -> dict:
         return {
             "task_id":               self.task_id,
@@ -492,6 +643,9 @@ class Task:
             "description":           self.description,
             "motto":                 self.motto,
             "due_date":              self.due_date.isoformat(),
+            "importance":            self.importance.name,
+            "planned_minutes":        self.planned_minutes,
+            "reminder_at":            self.reminder_at.isoformat() if self.reminder_at else None,
             "mode":                  self.mode.name,
             "status":                self.status.value,
             "total_focused_minutes": self.total_focused_minutes,
@@ -536,6 +690,62 @@ class Calendar:
         """按计时模式筛选任务"""
         return [t for t in self.tasks if t.mode == mode]
 
+    def get_reminders(self, now: Optional[datetime] = None) -> List[dict]:
+        """生成所有未完成任务的提醒信息"""
+        now = now or datetime.now()
+        reminders = [
+            task.build_reminder(now)
+            for task in self.tasks
+            if task.status not in (TaskStatus.COMPLETED, TaskStatus.ABANDONED)
+        ]
+        importance_order = {"urgent": 0, "strong": 1, "normal": 2, "soft": 3, "silent": 4, "none": 5}
+        return sorted(
+            reminders,
+            key=lambda item: (
+                importance_order.get(item["level"], 9),
+                item["minutes_left"],
+            ),
+        )
+
+    def generate_day_plan(self, query_date: date) -> dict:
+        """根据当天任务生成日计划"""
+        day_tasks = sorted(
+            self.get_tasks_by_date(query_date),
+            key=lambda task: (-task.importance.value, task.due_date),
+        )
+        plan_items = []
+        cursor = datetime.combine(query_date, datetime.min.time()).replace(hour=9)
+        for task in day_tasks:
+            start_time = max(cursor, task.created_at if task.created_at.date() == query_date else cursor)
+            end_time = start_time + timedelta(minutes=task.planned_minutes)
+            plan_items.append({
+                "task_id": task.task_id,
+                "title": task.title,
+                "importance": task.importance.name,
+                "planned_minutes": task.planned_minutes,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "due_date": task.due_date.isoformat(),
+                "status": task.status.value,
+            })
+            cursor = end_time
+        return {
+            "date": query_date.isoformat(),
+            "total_planned_minutes": round(sum(task.planned_minutes for task in day_tasks), 2),
+            "items": plan_items,
+        }
+
+    def generate_week_plan(self, any_day_in_week: date) -> dict:
+        """根据某天所在周生成周计划（周一到周日）"""
+        monday = any_day_in_week - timedelta(days=any_day_in_week.weekday())
+        days = [self.generate_day_plan(monday + timedelta(days=i)) for i in range(7)]
+        return {
+            "week_start": monday.isoformat(),
+            "week_end": (monday + timedelta(days=6)).isoformat(),
+            "total_planned_minutes": round(sum(day["total_planned_minutes"] for day in days), 2),
+            "days": days,
+        }
+
     def to_dict(self) -> dict:
         return {
             "calendar_id": self.calendar_id,
@@ -568,6 +778,9 @@ class User:
         due_date:    datetime,
         mode:        TimerMode = TimerMode.POMODORO,
         motto:       str = "",
+        importance:  ImportanceLevel = ImportanceLevel.MEDIUM,
+        planned_minutes: float = 25.0,
+        reminder_at: Optional[datetime] = None,
         
     ) -> Task:
         """创建任务并自动加入日历"""
@@ -578,9 +791,62 @@ class User:
             due_date    = due_date,
             mode        = mode,
             motto       = motto,
+            importance  = importance,
+            planned_minutes = planned_minutes,
+            reminder_at = reminder_at,
         )
+        User._next_task_id += 1
         self.calendar.add_task(task)
         return task
+
+    def create_tasks_from_arrangements(self, arrangements: List[Dict[str, Any]]) -> List[Task]:
+        """
+        输入安排列表，批量创建任务
+        arrangement 支持字段：title、description、due_date、mode、motto、importance、planned_minutes、reminder_at
+        """
+        created_tasks: List[Task] = []
+        for item in arrangements:
+            due_date = item.get("due_date")
+            if isinstance(due_date, str):
+                due_date = datetime.fromisoformat(due_date)
+            reminder_at = item.get("reminder_at")
+            if isinstance(reminder_at, str):
+                reminder_at = datetime.fromisoformat(reminder_at)
+            mode = item.get("mode", TimerMode.POMODORO)
+            if isinstance(mode, str):
+                mode = TimerMode[mode.upper()]
+            importance = item.get("importance", ImportanceLevel.MEDIUM)
+            if isinstance(importance, str):
+                importance = ImportanceLevel[importance.upper()]
+            elif isinstance(importance, int):
+                importance = ImportanceLevel(importance)
+            created_tasks.append(self.create_task(
+                title=item.get("title", "未命名任务"),
+                description=item.get("description", ""),
+                due_date=due_date or datetime.now(),
+                mode=mode,
+                motto=item.get("motto", ""),
+                importance=importance,
+                planned_minutes=float(item.get("planned_minutes", 25.0)),
+                reminder_at=reminder_at,
+            ))
+        return created_tasks
+
+    def generate_day_plan(self, query_date: date) -> dict:
+        """生成日计划"""
+        return self.calendar.generate_day_plan(query_date)
+
+    def generate_week_plan(self, any_day_in_week: date) -> dict:
+        """生成周计划"""
+        return self.calendar.generate_week_plan(any_day_in_week)
+
+    def get_reminders(self, now: Optional[datetime] = None) -> List[dict]:
+        """获取重要事件提醒"""
+        return self.calendar.get_reminders(now)
+
+    def get_time_usage_report(self, start_date: date, end_date: date) -> dict:
+        """统计时间使用情况，并与计划进行对比"""
+        return self.statistics.get_time_usage_report(self.calendar.tasks, start_date, end_date)
 
     def save_session(self, record: SessionRecord) -> None:
         """保存一次计时会话，同步写入对应 Task 和统计中心"""
