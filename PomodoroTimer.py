@@ -1875,6 +1875,13 @@ class TimerController:
         Returns:
             结构化响应字典
         """
+        # 根据当前阶段获取对应的 motto
+        if self.is_pomodoro:
+            pomodoro_timer: PomodoroTimer = self.timer  # type: ignore
+            current_motto = self.user.get_random_motto(pomodoro_timer.current_phase)
+        else:
+            current_motto = self.user.get_random_motto(PomodoroPhase.WORK)
+
         response = {
             "action":       action,
             "message":      message,
@@ -1884,10 +1891,10 @@ class TimerController:
             "state":        self.timer.state.value,
             "display_time": self.timer.format_display(),
             "elapsed_sec":  round(self.timer.elapsed, 1),
+            "current_motto": current_motto,
         }
         # 番茄钟模式附加进度信息
         if self.is_pomodoro:
-            pomodoro_timer: PomodoroTimer = self.timer  # type: ignore
             response["pomodoro_info"] = pomodoro_timer.get_progress_info()
         # 合并额外字段
         if extra:
