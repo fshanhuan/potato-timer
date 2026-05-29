@@ -594,8 +594,10 @@ class Statistics:
         if not self.autosave or not self.storage_path:
             return
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.storage_path.open("w", encoding="utf-8") as file:
+        tmp_path = self.storage_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as file:
             json.dump(self.to_dict(), file, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.storage_path)
 
 
 # ============================================================
@@ -725,10 +727,34 @@ class Task:
             "reminder_at":            self.reminder_at.isoformat() if self.reminder_at else None,
             "mode":                  self.mode.name,
             "status":                self.status.value,
+            "created_at":            self.created_at.isoformat(),
+            "completed_at":          self.completed_at.isoformat() if self.completed_at else None,
             "total_focused_minutes": self.total_focused_minutes,
-            "timer_state":           self.timer.state.value,
-            "display_time":          self.timer.format_display(),
         }
+
+    @staticmethod
+    def from_dict(data: dict) -> "Task":
+        """从持久化数据恢复任务"""
+        mode = TimerMode[data["mode"]]
+        due_date = datetime.fromisoformat(data["due_date"]) if data.get("due_date") else None
+        reminder_at = datetime.fromisoformat(data["reminder_at"]) if data.get("reminder_at") else None
+        task = Task(
+            task_id         = int(data["task_id"]),
+            title           = data["title"],
+            description     = data.get("description", ""),
+            due_date        = due_date,
+            mode            = mode,
+            motto           = data.get("motto", ""),
+            importance      = ImportanceLevel[data["importance"]],
+            planned_minutes = float(data.get("planned_minutes", 25.0)),
+            reminder_at     = reminder_at,
+        )
+        task.status = TaskStatus(data.get("status", "pending"))
+        if data.get("created_at"):
+            task.created_at = datetime.fromisoformat(data["created_at"])
+        if data.get("completed_at"):
+            task.completed_at = datetime.fromisoformat(data["completed_at"])
+        return task
 
 
 class Calendar:
@@ -736,10 +762,11 @@ class Calendar:
     日历类
     职责：按日期组织和管理多个 Task，是 User 与 Task 之间的中间层
     """
-    def __init__(self, calendar_id: int, name: str):
+    def __init__(self, calendar_id: int, name: str, storage_path: Optional[Path] = None):
         self.calendar_id: int        = calendar_id
         self.name:        str        = name
         self.tasks:       List[Task] = []
+        self.storage_path: Optional[Path] = storage_path
 
     def add_task(self, task: Task) -> None:
         self.tasks.append(task)
@@ -853,6 +880,42 @@ class Calendar:
             "task_count":  len(self.tasks),
             "tasks":       [t.to_dict() for t in self.tasks],
         }
+
+    @staticmethod
+    def from_dict(data: dict) -> "Calendar":
+        """从持久化数据恢复日历及所有任务"""
+        calendar = Calendar(
+            calendar_id=int(data["calendar_id"]),
+            name=data["name"],
+        )
+        for task_data in data.get("tasks", []):
+            calendar.add_task(Task.from_dict(task_data))
+        return calendar
+
+    def save_to_file(self) -> None:
+        """将日历（含所有任务）保存到本地文件"""
+        if not self.storage_path:
+            return
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "calendar_id": self.calendar_id,
+            "name": self.name,
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
+        tmp_path = self.storage_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.storage_path)
+
+    def load_from_file(self) -> None:
+        """从本地文件加载日历及所有任务；文件不存在时保持空日历"""
+        if not self.storage_path or not self.storage_path.exists():
+            return
+        with self.storage_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        self.calendar_id = int(data.get("calendar_id", self.calendar_id))
+        self.name = data.get("name", self.name)
+        self.tasks = [Task.from_dict(t) for t in data.get("tasks", [])]
     
 
 class MottoProvider:
@@ -912,21 +975,25 @@ class UserManager:
         self.motto_provider = MottoProvider(motto_path or (base_dir / "mottos.txt"))
 
     def create_user(self, nickname: str) -> "User":
-        """创建或加载用户；昵称相同会自动加载历史统计数据"""
+        """创建或加载用户；昵称相同会自动加载历史统计数据、计划和任务"""
         clean_name = nickname.strip()
         if not clean_name:
             raise ValueError("用户昵称不能为空")
         user_id = self._build_user_id(clean_name)
-        stats_path = self.storage_dir / f"{self._safe_filename(clean_name)}_stats.json"
-        plans_path = self.storage_dir / f"{self._safe_filename(clean_name)}_plans.json"
+        safe_name = self._safe_filename(clean_name)
+        stats_path = self.storage_dir / f"{safe_name}_stats.json"
+        plans_path = self.storage_dir / f"{safe_name}_plans.json"
+        tasks_path = self.storage_dir / f"{safe_name}_tasks.json"
         return User(
             user_id=user_id,
             username=clean_name,
             statistics_path=stats_path,
             plans_path=plans_path,
+            tasks_path=tasks_path,
             motto_provider=self.motto_provider,
             load_statistics=True,
             load_plans=True,
+            load_tasks=True,
         )
 
     @staticmethod
@@ -1140,31 +1207,38 @@ class User:
     关联：1 User → 1 Calendar → N Tasks
           1 User → 1 Statistics → N DailyStats → N SessionRecords
     """
-    _next_task_id: int = 1
     def __init__(
         self,
         user_id: int,
         username: str,
         statistics_path: Optional[Path] = None,
         plans_path: Optional[Path] = None,
+        tasks_path: Optional[Path] = None,
         motto_provider: Optional[MottoProvider] = None,
         load_statistics: bool = False,
         load_plans: bool = False,
+        load_tasks: bool = False,
     ):
         self.user_id:   int      = user_id
         self.username:  str      = username
         self.statistics_path: Optional[Path] = statistics_path
         self.plans_path: Optional[Path] = plans_path
+        self.tasks_path: Optional[Path] = tasks_path
         self.motto_provider: MottoProvider = motto_provider or MottoProvider()
+        self._next_task_id: int = 1
+        self._next_plan_id: int = 1
         # 核心聚合关系
-        self.calendar:   Calendar   = Calendar(calendar_id=user_id, name=f"{username}的日历")
+        self.calendar:   Calendar   = Calendar(
+            calendar_id=user_id, name=f"{username}的日历", storage_path=tasks_path,
+        )
         self.statistics: Statistics = Statistics(user_id=user_id, storage_path=statistics_path)
         self.focus_plans: List[FocusPlan] = []
-        self._next_plan_id: int = 1
         if load_statistics:
             self.statistics.load_from_file()
         if load_plans:
             self.load_focus_plans()
+        if load_tasks:
+            self.load_tasks()
 
 
     def create_task(
@@ -1183,7 +1257,7 @@ class User:
         if not motto:
             motto = self.get_random_motto(PomodoroPhase.WORK)
         task = Task(
-            task_id     = User._next_task_id,
+            task_id     = self._next_task_id,
             title       = title,
             description = description,
             due_date    = due_date,
@@ -1193,8 +1267,9 @@ class User:
             planned_minutes = planned_minutes,
             reminder_at = reminder_at,
         )
-        User._next_task_id += 1
+        self._next_task_id += 1
         self.calendar.add_task(task)
+        self.save_tasks()
         return task
 
     def create_tasks_from_arrangements(self, arrangements: List[Dict[str, Any]]) -> List[Task]:
@@ -1311,6 +1386,33 @@ class User:
         """手动保存当前用户统计数据到本地"""
         self.statistics.save_to_file()
 
+    def save_tasks(self) -> None:
+        """将任务列表保存到本地文件"""
+        if not self.tasks_path:
+            return
+        self.tasks_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "user_id": self.user_id,
+            "username": self.username,
+            "next_task_id": self._next_task_id,
+            "calendar": self.calendar.to_dict(),
+        }
+        tmp_path = self.tasks_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.tasks_path)
+
+    def load_tasks(self) -> None:
+        """从本地文件加载任务列表；文件不存在时保持空日历"""
+        if not self.tasks_path or not self.tasks_path.exists():
+            return
+        with self.tasks_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        self._next_task_id = int(data.get("next_task_id", 1))
+        if "calendar" in data:
+            self.calendar = Calendar.from_dict(data["calendar"])
+            self.calendar.storage_path = self.tasks_path
+
     def load_focus_plans(self) -> None:
         """从本地文件加载计划表；文件不存在时保持空计划"""
         if not self.plans_path or not self.plans_path.exists():
@@ -1337,8 +1439,10 @@ class User:
             "next_plan_id": self._next_plan_id,
             "focus_plans": [plan.to_dict() for plan in self.focus_plans],
         }
-        with self.plans_path.open("w", encoding="utf-8") as file:
+        tmp_path = self.plans_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.plans_path)
 
     @staticmethod
     def _parse_date(value: Any) -> date:
@@ -1476,7 +1580,18 @@ class TimerController:
             message="⏸ 已暂停",
             action="paused",
         )
-
+    # def resume(self) -> dict:
+    #     """
+    #     从暂停状态恢复计时
+    #     语义上等同于 start()，单独提供此方法使调用方意图更清晰
+    #     Returns:
+    #         状态字典
+    #     """
+    #     if self.timer.state != TimerState.PAUSED:
+    #         return self._build_response(
+    #             message=f"⚠ 当前状态为 [{self.state.value}]，不处于暂停状态，无法恢复",
+    #             action="blocked",
+    #         )
     def stop(self, note: Optional[str] = None) -> dict:
         """
         主动停止计时并保存会话记录
@@ -1508,7 +1623,21 @@ class TimerController:
                 "record_id":       record.record_id,
             },
         )
-
+    # def reset(self) -> dict:
+    #     """
+    #     静默重置计时器
+    #     不保存任何记录，适用于：
+    #         - 用户误触开始后立即取消
+    #         - 切换任务前清理状态
+    #     Returns:
+    #         状态字典
+    #     """
+    #     self.timer.reset()
+    #     self._session_start = None
+    #     return self._build_response(
+    #         message="🔄 已重置",
+    #         action="reset",
+    #     )
     # =========================================================
     # 番茄钟专属操作
     # =========================================================
