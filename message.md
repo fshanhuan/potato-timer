@@ -483,7 +483,7 @@
 
     文件：`ai_assistant.py`
 
-    AI 可将自然语言自动解析为任务或计划表。模型固定为 `deepseek-v4flash`，API Key 从 `~/.deepseek_key` 文件读取。
+    AI 可将自然语言自动解析为任务或计划表。模型固定为 `mimo-v2.5-pro`，API Key 从 `~/.deepseek_key` 文件读取（Mimo API）。
 
     **初始化：**
 
@@ -567,7 +567,7 @@
 
     - `chat()` 在解析成功时**自动创建**任务/计划，`preview()` 只解析不创建。
     - AI 回复已包含 emoji 和友好语气，可直接展示在对话框 UI 中。
-    - 模型锁定为 `deepseek-v4flash`，不可切换。
+    - 模型锁定为 `mimo-v2.5-pro`，不可切换。
     - API Key 文件位置：`~/.deepseek_key`（纯文本，只写 key 本身），换设备只需复制该文件。
 
     ---

@@ -1,6 +1,6 @@
 """
 AI 辅助模块
-使用 DeepSeek API 将自然语言解析为任务或计划表，通过 PomodoroTimer 的 User API 创建。
+使用 Mimo API 将自然语言解析为任务或计划表，通过 PomodoroTimer 的 User API 创建。
 
 工作流程：
     1. preview(user_input) → 调用 AI 解析，返回预览结果（不创建任何东西）
@@ -8,7 +8,7 @@ AI 辅助模块
     3. confirm(preview_result) → 调用 user.create_task / create_focus_plan 创建
 
 API Key：默认从 ~/.deepseek_key 文件读取（纯文本，只存 key 本身）
-模型：固定使用 deepseek-v4flash
+模型：固定使用 mimo-v2.5-pro
 零外部依赖：只使用 Python 标准库 (urllib.request + json)
 """
 
@@ -20,22 +20,22 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, date, timedelta
 
 # 固定模型，不允许修改
-_MODEL = "deepseek-v4-flash"
+_MODEL = "mimo-v2.5-pro"
 
 
 def load_api_key(key_path: Optional[Path] = None) -> str:
-    """从文件读取 DeepSeek API Key；默认读取 ~/.deepseek_key"""
+    """从文件读取 Mimo API Key；默认读取 ~/.deepseek_key"""
     path = key_path or Path.home() / ".deepseek_key"
     if not path.exists():
         raise FileNotFoundError(
             f"API Key 文件不存在: {path}\n"
-            "请创建该文件并将 DeepSeek API Key 写入（纯文本，只写 key 本身）"
+            "请创建该文件并将 Mimo API Key 写入（纯文本，只写 key 本身）"
         )
     return path.read_text(encoding="utf-8").strip()
 
 
 # ============================================================
-# System Prompt — 指导 DeepSeek 输出结构化 JSON
+# System Prompt — 指导 Mimo 输出结构化 JSON
 # ============================================================
 
 def _build_system_prompt() -> str:
@@ -127,16 +127,16 @@ def _build_system_prompt() -> str:
 
 
 # ============================================================
-# AIParser — 底层 DeepSeek API 调用
+# AIParser — 底层 Mimo API 调用
 # ============================================================
 
 class AIParser:
-    """调用 DeepSeek API 解析自然语言（模型固定为 deepseek-v4flash）"""
+    """调用 Mimo API 解析自然语言（模型固定为 mimo-v2.5-pro）"""
 
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.deepseek.com",
+        base_url: str = "https://api.xiaomimimo.com/v1",
         timeout: int = 30,
     ):
         self.api_key = api_key
@@ -204,7 +204,7 @@ class AIAssistant:
     AI 辅助助手
     工作流程：preview → 前端展示 → confirm
 
-    api_key 默认从 ~/.deepseek_key 自动读取；也可显式传入
+    api_key 默认从 ~/.deepseek_key（Mimo API Key）自动读取；也可显式传入
     """
 
     def __init__(self, user: "User", api_key: Optional[str] = None):  # noqa: F821
