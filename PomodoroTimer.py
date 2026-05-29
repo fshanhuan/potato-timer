@@ -13,7 +13,7 @@ from pathlib import Path
 # ============================================================
 # 枚举类：统一管理所有状态常量
 # ============================================================
-#有没有新增功能根据四象限法则对任务字典列表进行lambda排序，返回的列表前端显示
+
 class TimerMode(Enum):
     """计时模式"""
     POMODORO   = 0   # 番茄钟
@@ -442,11 +442,11 @@ class Statistics:
 
     def get_weekly(self, any_day_in_week: date) -> List[DailyStats]:
         """查询某天所在周（周一~周日）的每日统计列表"""
-        monday = any_day_in_week - __import__('datetime').timedelta(days=any_day_in_week.weekday())
+        monday = any_day_in_week - timedelta(days=any_day_in_week.weekday())
         return [
-            self._daily_map[monday + __import__('datetime').timedelta(days=i)]
+            self._daily_map[monday + timedelta(days=i)]
             for i in range(7)
-            if (monday + __import__('datetime').timedelta(days=i)) in self._daily_map
+            if (monday + timedelta(days=i)) in self._daily_map
         ]
 
     def get_monthly(self, year: int, month: int) -> List[DailyStats]:
@@ -1463,14 +1463,6 @@ class User:
             return datetime.fromisoformat(value).date()
         raise ValueError("日期必须是 date、datetime 或 ISO 格式字符串")
 
-    def save_session(self, record: SessionRecord) -> None:
-        """保存一次计时会话，同步写入对应 Task 和统计中心"""
-        task = self.calendar.get_task_by_id(record.task_id)
-        if task:
-            task.session_records.append(record)
-        self.statistics.add_session_record(record)
-
-
     def get_today_summary(self) -> dict:
         """获取今日专注摘要（供 API 返回前端）"""
         stats = self.statistics.get_daily(date.today())
@@ -1620,8 +1612,10 @@ class TimerController:
                 action="none",
             )
         if current_state == TimerState.IDLE:
-            # 全新启动：记录会话开始时刻
+            # 全新启动：记录会话开始时刻，标记任务为进行中
             self._session_start = datetime.now()
+            if self.task.status == TaskStatus.PENDING:
+                self.task.status = TaskStatus.ACTIVE
             action_label = "started"
         else:
             # PAUSED → 恢复：保留原 _session_start
@@ -1650,18 +1644,6 @@ class TimerController:
             message="⏸ 已暂停",
             action="paused",
         )
-    # def resume(self) -> dict:
-    #     """
-    #     从暂停状态恢复计时
-    #     语义上等同于 start()，单独提供此方法使调用方意图更清晰
-    #     Returns:
-    #         状态字典
-    #     """
-    #     if self.timer.state != TimerState.PAUSED:
-    #         return self._build_response(
-    #             message=f"⚠ 当前状态为 [{self.state.value}]，不处于暂停状态，无法恢复",
-    #             action="blocked",
-    #         )
     def stop(self, note: Optional[str] = None) -> dict:
         """
         主动停止计时并保存会话记录
@@ -1680,6 +1662,9 @@ class TimerController:
             )
         focused_seconds = self.timer.elapsed
         self.timer.stop()   # 内部调用 reset()，状态回到 IDLE
+        # 主动停止：任务回退到待办状态
+        if self.task.status == TaskStatus.ACTIVE:
+            self.task.status = TaskStatus.PENDING
         record = self._save_record(
             focused_seconds=focused_seconds,
             is_completed=False,
@@ -1693,21 +1678,7 @@ class TimerController:
                 "record_id":       record.record_id,
             },
         )
-    # def reset(self) -> dict:
-    #     """
-    #     静默重置计时器
-    #     不保存任何记录，适用于：
-    #         - 用户误触开始后立即取消
-    #         - 切换任务前清理状态
-    #     Returns:
-    #         状态字典
-    #     """
-    #     self.timer.reset()
-    #     self._session_start = None
-    #     return self._build_response(
-    #         message="🔄 已重置",
-    #         action="reset",
-    #     )
+
     # =========================================================
     # 番茄钟专属操作
     # =========================================================
@@ -1742,7 +1713,7 @@ class TimerController:
         phase_label = {
             PomodoroPhase.WORK:        "🍅 工作",
             PomodoroPhase.SHORT_BREAK: "☕ 短休息",
-            PomodoroPhase.LONG_BREAK:  "🛋  长休息",
+            PomodoroPhase.LONG_BREAK:  "🛋️ 长休息",
         }
         return self._build_response(
             message=f"🔄 切换至：{phase_label[new_phase]}",
