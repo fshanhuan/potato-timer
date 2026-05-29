@@ -1,0 +1,28 @@
+{
+  "user_id": 886374,
+  "username": "motto测试用户",
+  "avatar_path": null,
+  "next_task_id": 2,
+  "calendar": {
+    "calendar_id": 886374,
+    "name": "motto测试用户的日历",
+    "task_count": 1,
+    "tasks": [
+      {
+        "task_id": 1,
+        "title": "测试任务",
+        "description": "",
+        "motto": "每一个番茄钟，都是通向目标的一步",
+        "due_date": null,
+        "importance": "MEDIUM",
+        "planned_minutes": 25.0,
+        "reminder_at": null,
+        "mode": "POMODORO",
+        "status": "pending",
+        "created_at": "2026-05-29T22:34:00.241307",
+        "completed_at": null,
+        "total_focused_minutes": 0.0
+      }
+    ]
+  }
+}
