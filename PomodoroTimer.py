@@ -6,6 +6,7 @@ import time
 import json
 import random
 import re
+import shutil
 from pathlib import Path
 
 
@@ -1207,6 +1208,8 @@ class User:
     关联：1 User → 1 Calendar → N Tasks
           1 User → 1 Statistics → N DailyStats → N SessionRecords
     """
+    _SUPPORTED_AVATAR_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
     def __init__(
         self,
         user_id: int,
@@ -1214,6 +1217,7 @@ class User:
         statistics_path: Optional[Path] = None,
         plans_path: Optional[Path] = None,
         tasks_path: Optional[Path] = None,
+        avatar_path: Optional[Path] = None,
         motto_provider: Optional[MottoProvider] = None,
         load_statistics: bool = False,
         load_plans: bool = False,
@@ -1224,6 +1228,7 @@ class User:
         self.statistics_path: Optional[Path] = statistics_path
         self.plans_path: Optional[Path] = plans_path
         self.tasks_path: Optional[Path] = tasks_path
+        self.avatar_path: Optional[Path] = avatar_path
         self.motto_provider: MottoProvider = motto_provider or MottoProvider()
         self._next_task_id: int = 1
         self._next_plan_id: int = 1
@@ -1394,6 +1399,7 @@ class User:
         data = {
             "user_id": self.user_id,
             "username": self.username,
+            "avatar_path": str(self.avatar_path) if self.avatar_path else None,
             "next_task_id": self._next_task_id,
             "calendar": self.calendar.to_dict(),
         }
@@ -1409,6 +1415,8 @@ class User:
         with self.tasks_path.open("r", encoding="utf-8") as file:
             data = json.load(file)
         self._next_task_id = int(data.get("next_task_id", 1))
+        raw_avatar = data.get("avatar_path")
+        self.avatar_path = Path(raw_avatar) if raw_avatar else None
         if "calendar" in data:
             self.calendar = Calendar.from_dict(data["calendar"])
             self.calendar.storage_path = self.tasks_path
@@ -1468,10 +1476,72 @@ class User:
         stats = self.statistics.get_daily(date.today())
         return stats.to_dict() if stats else {"message": "今日暂无记录"}
 
+    # ---------- 头像管理 ----------
+
+    def set_avatar(self, source_path: Any) -> Path:
+        """
+        设置用户头像：将本地图片复制到用户数据目录
+        Args:
+            source_path: 本地图片文件路径（str 或 Path）
+        Returns:
+            新头像文件的 Path
+        Raises:
+            ValueError: 文件不存在、不是图片、或文件过大
+        """
+        source = Path(source_path)
+        if not source.is_file():
+            raise ValueError(f"头像源文件不存在: {source}")
+        ext = source.suffix.lower()
+        if ext not in self._SUPPORTED_AVATAR_EXTS:
+            raise ValueError(f"不支持的图片格式 {ext}，支持: {', '.join(sorted(self._SUPPORTED_AVATAR_EXTS))}")
+        max_size = 5 * 1024 * 1024
+        if source.stat().st_size > max_size:
+            raise ValueError(f"头像文件不能超过 5MB")
+        avatar_dir = self._avatar_dir()
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "_", self.username.strip()) or "user"
+        dest = avatar_dir / f"{safe_name}_avatar{ext}"
+        # 删除旧头像（可能扩展名不同）
+        self._clean_old_avatars(avatar_dir, safe_name, keep_ext=ext)
+        shutil.copy2(source, dest)
+        self.avatar_path = dest
+        self.save_tasks()
+        return dest
+
+    def remove_avatar(self) -> None:
+        """删除用户头像"""
+        if self.avatar_path and self.avatar_path.is_file():
+            self.avatar_path.unlink()
+        self.avatar_path = None
+        self.save_tasks()
+
+    def get_avatar_path(self) -> Optional[Path]:
+        """返回当前有效头像路径，文件不存在时返回 None"""
+        if self.avatar_path and self.avatar_path.is_file():
+            return self.avatar_path
+        return None
+
+    def _avatar_dir(self) -> Path:
+        """头像存储目录"""
+        if self.tasks_path:
+            return self.tasks_path.parent / "avatars"
+        return Path("local_user_data") / "avatars"
+
+    @staticmethod
+    def _clean_old_avatars(avatar_dir: Path, safe_name: str, keep_ext: str) -> None:
+        """删除同一用户的老头像文件（扩展名可能不同）"""
+        for ext in User._SUPPORTED_AVATAR_EXTS:
+            if ext == keep_ext:
+                continue
+            old = avatar_dir / f"{safe_name}_avatar{ext}"
+            if old.is_file():
+                old.unlink()
+
     def to_dict(self) -> dict:
         return {
             "user_id": self.user_id,
             "username": self.username,
+            "avatar_path": str(self.avatar_path) if self.avatar_path else None,
             "statistics_path": str(self.statistics_path) if self.statistics_path else None,
             "plans_path": str(self.plans_path) if self.plans_path else None,
             "calendar": self.calendar.to_dict(),
