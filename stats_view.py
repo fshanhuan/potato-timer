@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from data_manager import load_tasks, load_pomodoro_records
 from data_statistics import TimeStatistics
 
@@ -7,17 +9,14 @@ class StatsWindow:
     def __init__(self, root):
         self.win = tk.Toplevel(root)
         self.win.title("统计数据")
-        self.win.geometry("600x500")
+        self.win.geometry("650x600")
 
-        # 创建统计对象
         self.stats = TimeStatistics()
-
-        # 获取数据
         self.completion = self.stats.task_completion_rate()
         self.pomo = self.stats.pomodoro_summary()
 
-        # 创建界面
         self.create_widgets()
+        self.draw_pie_chart()   # 直接显示饼图
 
     def create_widgets(self):
         # 任务统计
@@ -34,19 +33,48 @@ class StatsWindow:
         ttk.Label(frame2, text=f"总专注时长: {self.pomo['work_minutes']} 分钟").pack(anchor="w")
         ttk.Label(frame2, text=f"总休息时长: {self.pomo['break_minutes']} 分钟").pack(anchor="w")
 
-        # 饼图按钮
-        ttk.Button(self.win, text="查看时间分配饼图", command=self.show_pie).pack(pady=10)
+        # 饼图容器
+        self.pie_frame = ttk.LabelFrame(self.win, text="时间分配饼图", padding=10)
+        self.pie_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         # 关闭按钮
-        ttk.Button(self.win, text="关闭", command=self.win.destroy).pack(pady=5)
+        ttk.Button(self.win, text="关闭", command=self.win.destroy).pack(pady=10)
 
-    def show_pie(self):
-        self.stats.plot_time_distribution()
+    def draw_pie_chart(self):
+        """直接在 tkinter 窗口中绘制饼图"""
+        work_min = self.pomo['work_minutes']
+        break_min = self.pomo['break_minutes']
+        completion = self.completion['completion_rate']
+        wasted_min = (100 - completion) / 100 * (work_min + break_min) if (work_min + break_min) > 0 else 0
+
+        labels = []
+        sizes = []
+        if work_min > 0:
+            labels.append("工作时间")
+            sizes.append(work_min)
+        if break_min > 0:
+            labels.append("休息时间")
+            sizes.append(break_min)
+        if wasted_min > 0:
+            labels.append("浪费时间")
+            sizes.append(wasted_min)
+
+        if not sizes:
+            label = ttk.Label(self.pie_frame, text="暂无数据，请先添加任务和番茄钟记录")
+            label.pack()
+            return
+
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=100)
+        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90,
+               colors=['#66b3ff', '#99ff99', '#ff9999'])
+        ax.set_title("时间分配")
+
+        canvas = FigureCanvasTkAgg(fig, master=self.pie_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
 def show_stats_window(parent_root=None):
-    """供外部调用的入口，parent_root 是主窗口的根"""
     if parent_root is None:
-        # 测试时自己创建根窗口
         root = tk.Tk()
         root.withdraw()
         StatsWindow(root)
@@ -55,5 +83,4 @@ def show_stats_window(parent_root=None):
         StatsWindow(parent_root)
 
 if __name__ == "__main__":
-    # 单独测试
     show_stats_window()
