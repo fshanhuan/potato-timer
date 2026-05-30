@@ -1,0 +1,7 @@
+{
+  "userAvatar": "/assets/images/default-avatar.jpg",
+  "alertIcon": "/assets/icons/alert-icon.png",
+  "timerIcon": "/assets/icons/timer-icon.png",
+  "shortBreakIcon": "/assets/icons/short-break.png",
+  "longBreakIcon": "/assets/icons/long-break.png"
+}

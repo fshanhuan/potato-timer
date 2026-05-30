@@ -1,0 +1,77 @@
+.timer-page {
+  position: fixed;
+  top: 0;
+  left: 200px;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(8px);
+}
+
+.timer-container {
+  text-align: center;
+}
+
+.timer-motto {
+  font-size: 18px;
+  color: #666;
+  margin-bottom: 32px;
+  font-weight: 500;
+}
+
+.timer-ring-wrapper {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 40px;
+}
+
+.timer-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 64px;
+  height: 64px;
+}
+
+.timer-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.timer-display {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 48px;
+  font-weight: 600;
+  color: #333;
+}
+
+.timer-controls {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.paused-controls {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
+.timer-paused-info {
+  color: #999;
+  font-size: 14px;
+}
+
+.timer-skip-break {
+  margin-top: 8px;
+}

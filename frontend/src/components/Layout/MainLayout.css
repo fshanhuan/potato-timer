@@ -1,0 +1,50 @@
+.main-layout {
+  display: flex;
+  min-height: 100vh;
+  background: #f5f5f5;
+  background-image: var(--background-image, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+.main-content {
+  flex: 1;
+  margin-left: 200px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.content-wrapper {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  position: relative;
+}
+
+.alert-bar {
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: white;
+  font-weight: 500;
+  z-index: 200;
+  position: sticky;
+  top: 0;
+}
+
+.alert-bar button {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.alert-bar button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
